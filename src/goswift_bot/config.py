@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -12,6 +13,12 @@ from .locations import (
 )
 
 
+DEFAULT_LOG_LEVEL = "INFO"
+VALID_LOG_LEVELS = {"DEBUG", "INFO", "WARNING", "ERROR"}
+DEFAULT_LOGS_MAX_GB = 5.0
+DEFAULT_LOG_CHUNK_MB = 1024
+
+
 def _parse_date(s: str | None) -> date | None:
     if not s:
         return None
@@ -19,6 +26,68 @@ def _parse_date(s: str | None) -> date | None:
         return date.fromisoformat(s.strip())
     except ValueError as exc:
         raise RuntimeError(f"Date must be in YYYY-MM-DD format, got: {s!r}") from exc
+
+
+def normalize_log_level(raw: str | None) -> str:
+    if raw is None:
+        return DEFAULT_LOG_LEVEL
+
+    level = raw.strip().upper()
+    if level not in VALID_LOG_LEVELS:
+        raise RuntimeError(
+            "LOG_LEVEL must be one of DEBUG, INFO, WARNING, ERROR"
+        )
+    return level
+
+
+def read_log_level_from_env() -> str:
+    return normalize_log_level(os.getenv("LOG_LEVEL"))
+
+
+def _parse_positive_float(raw: str | None, *, env_name: str, default: float) -> float:
+    if raw is None:
+        return default
+
+    try:
+        value = float(raw.strip())
+    except ValueError as exc:
+        raise RuntimeError(f"{env_name} must be a positive number") from exc
+
+    if value <= 0:
+        raise RuntimeError(f"{env_name} must be a positive number")
+    return value
+
+
+def _parse_positive_int(raw: str | None, *, env_name: str, default: int) -> int:
+    if raw is None:
+        return default
+
+    try:
+        value = int(raw.strip())
+    except ValueError as exc:
+        raise RuntimeError(f"{env_name} must be a positive integer") from exc
+
+    if value <= 0:
+        raise RuntimeError(f"{env_name} must be a positive integer")
+    return value
+
+
+def read_logs_max_bytes_from_env() -> int:
+    value_gb = _parse_positive_float(
+        os.getenv("LOGS_MAX_GB"),
+        env_name="LOGS_MAX_GB",
+        default=DEFAULT_LOGS_MAX_GB,
+    )
+    return int(value_gb * 1024 * 1024 * 1024)
+
+
+def read_log_chunk_bytes_from_env() -> int:
+    value_mb = _parse_positive_int(
+        os.getenv("LOG_CHUNK_MB"),
+        env_name="LOG_CHUNK_MB",
+        default=DEFAULT_LOG_CHUNK_MB,
+    )
+    return value_mb * 1024 * 1024
 
 
 def _get_runtime_config_path() -> Path:
@@ -107,6 +176,13 @@ class Config:
     goswift_date_first: date | None
     goswift_date_last: date | None
     check_interval: timedelta
+    log_level: str
+    logs_max_bytes: int
+    log_chunk_bytes: int
+
+    @property
+    def log_level_value(self) -> int:
+        return getattr(logging, self.log_level)
 
     @property
     def date_range_ok(self) -> bool:
@@ -205,6 +281,12 @@ class Config:
         except ValueError as exc:
             raise RuntimeError("CHECK_INTERVAL_MINUTES must be an integer") from exc
 
+        log_level = read_log_level_from_env()
+        logs_max_bytes = read_logs_max_bytes_from_env()
+        log_chunk_bytes = read_log_chunk_bytes_from_env()
+        if log_chunk_bytes > logs_max_bytes:
+            raise RuntimeError("LOG_CHUNK_MB must be less than or equal to LOGS_MAX_GB")
+
         return cls(
             telegram_bot_token=token,
             telegram_owner_chat_id=owner_chat_id,
@@ -217,4 +299,7 @@ class Config:
             goswift_date_first=date_first,
             goswift_date_last=date_last,
             check_interval=timedelta(minutes=interval_minutes),
+            log_level=log_level,
+            logs_max_bytes=logs_max_bytes,
+            log_chunk_bytes=log_chunk_bytes,
         )

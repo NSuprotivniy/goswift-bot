@@ -53,6 +53,9 @@ def default_test_env() -> dict[str, str]:
         "GOSWIFT_LOCATIONS": "koidula,luhamaa",
         "GOSWIFT_CATEGORY": "B",
         "CHECK_INTERVAL_MINUTES": "10",
+        "LOG_LEVEL": "INFO",
+        "LOGS_MAX_GB": "5",
+        "LOG_CHUNK_MB": "1024",
     }
 
 
@@ -89,6 +92,9 @@ def apply_env(monkeypatch: pytest.MonkeyPatch, env: dict[str, str]) -> None:
         "GOSWIFT_DATE_LAST",
         "GOSWIFT_CHECK_DATE",
         "CHECK_INTERVAL_MINUTES",
+        "LOG_LEVEL",
+        "LOGS_MAX_GB",
+        "LOG_CHUNK_MB",
     }
     for key in managed_keys:
         monkeypatch.delenv(key, raising=False)

@@ -21,6 +21,11 @@ and fill in the values:
 
 - `TELEGRAM_BOT_TOKEN`: Bot token from BotFather.
 - `TELEGRAM_OWNER_CHAT_ID`: Your personal chat ID; only this chat can use the bot.
+- `LOG_LEVEL`: Logging verbosity. Supported values: `DEBUG`, `INFO`,
+  `WARNING`, `ERROR`. Default is `INFO`.
+- `LOGS_MAX_GB`: Maximum total size of the `logs` directory. Default is `5`.
+- `LOG_CHUNK_MB`: Maximum size of a single active log chunk before rotation.
+  Default is `1024`.
 - `GOSWIFT_BASE_URL`: Base URL of the GoSwift portal (default is
   `https://www.eestipiir.ee`).
 - `GOSWIFT_COOKIE`: Optional session cookie string copied from your browser.
@@ -51,6 +56,33 @@ contain:
 If runtime settings are present, they override environment values for dates and
 locations.
 
+## Logging
+
+The bot writes logs both to stdout and to per-session log files in `./logs`.
+Each process start creates a session whose active file is split into chunk files
+named like `goswift-bot-YYYYMMDD-HHMMSS-ffffff.chunk0001.log`.
+
+Use `LOG_LEVEL=DEBUG` when you want a detailed trace for manual testing. In
+that mode the bot logs the full operator flow, GoSwift request/response
+details, parser steps, runtime state changes, and outgoing Telegram messages.
+By design this debug log may contain sensitive runtime data, including raw
+payloads and session-related values, so use it only for controlled local runs.
+
+Log retention is controlled by `LOGS_MAX_GB` and `LOG_CHUNK_MB`:
+- active logs rotate into new chunks when they reach `LOG_CHUNK_MB`;
+- when the whole `logs` directory exceeds `LOGS_MAX_GB`, the oldest closed
+  `.log` chunks are compressed into `.log.gz`;
+- if everything old is already archived and the directory is still too large,
+  the oldest `.log.gz` archives are deleted;
+- the active current chunk is never archived or deleted while the process is running.
+
+If the disk is full or file logging cannot continue, the service stays alive and
+continues logging to stdout/stderr only.
+
+When you run the service with `docker compose`, the local `./logs` directory is
+mounted into the container as `/app/logs`, so log files remain available on the
+host after container restarts or recreation.
+
 ## Running locally (without Docker)
 
 ```bash
@@ -58,6 +90,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 export $(grep -v '^#' example.env | xargs)
+export LOG_LEVEL=DEBUG
 PYTHONPATH=src python3 -m goswift_bot.main
 ```
 
@@ -75,6 +108,8 @@ Or use `docker-compose`:
 ```bash
 docker compose up -d
 ```
+
+Session log files will appear in `./logs`.
 
 ## Testing
 

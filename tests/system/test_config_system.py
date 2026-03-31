@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+import logging
 
 import pytest
 
@@ -82,6 +83,10 @@ def test_config_from_env_uses_runtime_overrides_and_normalizes_defaults(
         date(2026, 3, 11),
     ]
     assert int(cfg.check_interval.total_seconds()) == 900
+    assert cfg.log_level == "INFO"
+    assert cfg.log_level_value == logging.INFO
+    assert cfg.logs_max_bytes == 5 * 1024 * 1024 * 1024
+    assert cfg.log_chunk_bytes == 1024 * 1024 * 1024
 
 
 @pytest.mark.system
@@ -133,6 +138,9 @@ def test_config_from_env_allows_missing_optional_cookie(
     assert cfg.goswift_base_url == "https://www.eestipiir.ee"
     assert cfg.goswift_locations == ["koidula", "luhamaa"]
     assert int(cfg.check_interval.total_seconds()) == 900
+    assert cfg.log_level == "INFO"
+    assert cfg.logs_max_bytes == 5 * 1024 * 1024 * 1024
+    assert cfg.log_chunk_bytes == 1024 * 1024 * 1024
 
 
 @pytest.mark.system
@@ -193,3 +201,47 @@ def test_runtime_config_persistence_updates_future_config_loads(
         date(2026, 4, 2),
         date(2026, 4, 3),
     ]
+
+
+@pytest.mark.system
+def test_config_from_env_normalizes_log_level_and_rejects_invalid_values(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """
+    Objective:
+        Verify that LOG_LEVEL is configurable, normalized, and validated early.
+
+    Required live env:
+        None. This checks config parsing only.
+    """
+    harness = build_harness(
+        monkeypatch,
+        tmp_path / "runtime_config.json",
+        env={
+            "TELEGRAM_BOT_TOKEN": "token",
+            "TELEGRAM_OWNER_CHAT_ID": "42",
+            "GOSWIFT_LOCATIONS": "koidula",
+            "LOG_LEVEL": "debug",
+            "LOGS_MAX_GB": "2",
+            "LOG_CHUNK_MB": "256",
+        },
+    )
+
+    assert harness.config.log_level == "DEBUG"
+    assert harness.config.log_level_value == logging.DEBUG
+    assert harness.config.logs_max_bytes == 2 * 1024 * 1024 * 1024
+    assert harness.config.log_chunk_bytes == 256 * 1024 * 1024
+
+    monkeypatch.setenv("LOG_LEVEL", "verbose")
+    with pytest.raises(RuntimeError, match="LOG_LEVEL must be one of DEBUG, INFO, WARNING, ERROR"):
+        Config.from_env()
+
+    monkeypatch.setenv("LOG_LEVEL", "INFO")
+    monkeypatch.setenv("LOGS_MAX_GB", "0")
+    with pytest.raises(RuntimeError, match="LOGS_MAX_GB must be a positive number"):
+        Config.from_env()
+
+    monkeypatch.setenv("LOGS_MAX_GB", "1")
+    monkeypatch.setenv("LOG_CHUNK_MB", "2048")
+    with pytest.raises(RuntimeError, match="LOG_CHUNK_MB must be less than or equal to LOGS_MAX_GB"):
+        Config.from_env()

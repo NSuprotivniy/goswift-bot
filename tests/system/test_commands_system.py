@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+import logging
 
 import pytest
 from telegram.constants import ParseMode
@@ -260,6 +261,36 @@ def test_locations_command_and_callback_persist_runtime_selection(
     assert "Current selection: <b>Luhamaa</b>" in query.edits[-1].payload["text"]
     assert harness.config.goswift_locations == ["luhamaa"]
     assert '"locations": [\n    "luhamaa"\n  ]' in harness.runtime_config_path.read_text()
+
+
+@pytest.mark.system
+def test_debug_logging_captures_command_and_runtime_state_changes(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, caplog: pytest.LogCaptureFixture
+) -> None:
+    harness = build_harness(
+        monkeypatch,
+        tmp_path / "runtime_config.json",
+        env={
+            "TELEGRAM_BOT_TOKEN": "token",
+            "TELEGRAM_OWNER_CHAT_ID": "42",
+            "GOSWIFT_LOCATIONS": "koidula,luhamaa",
+            "LOG_LEVEL": "DEBUG",
+        },
+    )
+    update, _ = make_message_update(42)
+    callback_update, _query = make_callback_update(42, f"{LOCATION_CALLBACK_PREFIX}koidula")
+    set_update, _ = make_message_update(42)
+    harness.context.args = ["2026-04-01", "2026-04-03"]
+
+    with caplog.at_level(logging.DEBUG):
+        run_async(locations_command(update, harness.context))
+        run_async(locations_callback(callback_update, harness.context))
+        run_async(setdaterange_command(set_update, harness.context))
+
+    assert "Handling Telegram command: name=locations chat_id=42" in caplog.text
+    assert "Updated runtime locations via callback: locations=['koidula']" in caplog.text
+    assert "Updated runtime date range via command: date_first=2026-04-01 date_last=2026-04-03" in caplog.text
+    assert "Sending info message: chat_id=42" in caplog.text
 
 
 @pytest.mark.system

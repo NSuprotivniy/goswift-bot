@@ -16,24 +16,12 @@ from .models import Slot
 
 logger = logging.getLogger(__name__)
 
-_RESPONSE_PREVIEW_LIMIT = 800
 _RESPONSE_BODY_LOG_LIMIT = 4000
 
 
 def _log_response_body(resp: requests.Response) -> None:
-    """Log response body: preview at INFO, full/truncated at DEBUG."""
+    """Log response body only at DEBUG to keep INFO readable."""
     text = resp.text
-    preview = text[:_RESPONSE_PREVIEW_LIMIT]
-    if len(text) > _RESPONSE_PREVIEW_LIMIT:
-        logger.info(
-            "GoSwift response body preview (first %d of %d chars):\n%s\n... [truncated]",
-            _RESPONSE_PREVIEW_LIMIT,
-            len(text),
-            preview,
-        )
-    else:
-        logger.info("GoSwift response body:\n%s", text)
-
     if len(text) > _RESPONSE_BODY_LOG_LIMIT:
         logger.debug(
             "GoSwift full response (first %d of %d chars):\n%s\n... [truncated]",
@@ -61,6 +49,7 @@ class GoSwiftClient:
 
     def _new_session(self) -> requests.Session:
         session = requests.Session()
+        logger.debug("Creating new GoSwift HTTP session")
         session.headers.update(
             {
                 "User-Agent": (
@@ -81,6 +70,11 @@ class GoSwiftClient:
             # Seed the session from a browser-exported Cookie header, but let
             # requests manage cookie updates after that.
             session.cookies.update(_cookie_dict_from_header(self.config.goswift_cookie))
+        logger.debug(
+            "Initialized GoSwift session: headers=%s cookies=%s",
+            dict(session.headers),
+            session.cookies.get_dict(),
+        )
         return session
 
     def fetch_slots(
@@ -97,6 +91,12 @@ class GoSwiftClient:
         """
         location = LOCATIONS[location_key]
         session = self._new_session()
+        logger.debug(
+            "Preparing GoSwift location flow: location=%s preferred_date=%s days=%d",
+            location.title,
+            preferred_date.isoformat(),
+            days,
+        )
         self._prepare_location(session, location_key)
 
         url = f"{self.config.goswift_base_url}/yphis/findOpenTimeslot.action"
@@ -113,18 +113,31 @@ class GoSwiftClient:
         logger.debug("GoSwift request: GET %s params=%s", url, params)
         resp = session.get(url, params=params, timeout=20)
         self._validate_response(resp, location_key)
-
-        return list(
+        slots = list(
             self._parse_slots_html(
                 resp.text,
                 location_key=location_key,
                 days=days,
             )
         )
+        logger.info(
+            "Parsed %d GoSwift slots for location=%s preferred_date=%s",
+            len(slots),
+            location.title,
+            preferred_date.isoformat(),
+        )
+        logger.debug(
+            "Parsed GoSwift slot details: location=%s preferred_date=%s slot_ids=%s",
+            location.title,
+            preferred_date.isoformat(),
+            [slot.id for slot in slots],
+        )
+        return slots
 
     def _prepare_location(self, session: requests.Session, location_key: str) -> None:
         location = LOCATIONS[location_key]
         base = f"{self.config.goswift_base_url}/yphis"
+        logger.debug("Starting GoSwift preparation flow: location=%s base=%s", location.title, base)
 
         self._request(
             session,
@@ -155,6 +168,11 @@ class GoSwiftClient:
             },
             location_key=location_key,
         )
+        logger.debug(
+            "Completed GoSwift preparation flow: location=%s cookies=%s",
+            location.title,
+            session.cookies.get_dict(),
+        )
         self._request(
             session,
             "POST",
@@ -184,6 +202,13 @@ class GoSwiftClient:
             data,
         )
         resp = session.request(method, url, data=data, timeout=20)
+        logger.debug(
+            "GoSwift flow response received: location=%s method=%s status=%s cookies=%s",
+            LOCATIONS[location_key].title,
+            method,
+            resp.status_code,
+            session.cookies.get_dict(),
+        )
         self._validate_response(resp, location_key)
         return resp
 
@@ -196,6 +221,11 @@ class GoSwiftClient:
             resp.headers.get("Content-Type", ""),
         )
         _log_response_body(resp)
+        logger.debug(
+            "GoSwift response headers: location=%s headers=%s",
+            LOCATIONS[location_key].title,
+            dict(resp.headers),
+        )
 
         if resp.history:
             history_chain = " -> ".join(
@@ -237,24 +267,56 @@ class GoSwiftClient:
         location = LOCATIONS[location_key]
 
         day_containers = soup.select("div.timeslots_desktop div.dayContainer")
+        logger.debug(
+            "Parsing GoSwift HTML: location=%s requested_days=%d available_day_containers=%d",
+            location.title,
+            days,
+            len(day_containers),
+        )
+        yielded = 0
         for day_container in day_containers[:days]:
             slot_divs = day_container.select("div.slotContainer")
+            logger.debug(
+                "Processing GoSwift day container: location=%s slot_containers=%d",
+                location.title,
+                len(slot_divs),
+            )
             for div in slot_divs:
                 classes = div.get("class", [])
                 if "slotLocked" in classes:
+                    logger.debug(
+                        "Skipping locked GoSwift slot: location=%s classes=%s",
+                        location.title,
+                        classes,
+                    )
                     continue
 
                 text = " ".join(div.get_text(strip=True).split())
                 if "Недоступно" in text:
+                    logger.debug(
+                        "Skipping unavailable GoSwift slot: location=%s text=%r",
+                        location.title,
+                        text,
+                    )
                     continue
 
                 when_raw = div.get("data-time")
                 if not when_raw:
+                    logger.debug(
+                        "Skipping GoSwift slot without data-time: location=%s text=%r",
+                        location.title,
+                        text,
+                    )
                     continue
 
                 try:
                     dt = datetime.strptime(when_raw, "%d.%m.%Y %H:%M")
                 except ValueError:
+                    logger.debug(
+                        "Skipping GoSwift slot with unparseable datetime: location=%s when_raw=%r",
+                        location.title,
+                        when_raw,
+                    )
                     continue
 
                 direction = self.config.goswift_direction
@@ -266,6 +328,13 @@ class GoSwiftClient:
                 booking_url = (
                     f"{self.config.goswift_base_url}/yphis/preReserveSelectVehicle.action"
                 )
+                yielded += 1
+                logger.debug(
+                    "Yielding GoSwift slot: location=%s slot_id=%s when=%s",
+                    location.title,
+                    slot_id,
+                    dt.isoformat(),
+                )
 
                 yield Slot(
                     id=slot_id,
@@ -275,3 +344,8 @@ class GoSwiftClient:
                     direction=direction,
                     booking_url=booking_url,
                 )
+        logger.debug(
+            "Completed GoSwift HTML parsing: location=%s yielded_slots=%d",
+            location.title,
+            yielded,
+        )

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from html import escape
 from typing import Iterable
 
@@ -9,6 +10,8 @@ from telegram.ext import ContextTypes
 
 from .models import Slot, LastRunInfo
 
+logger = logging.getLogger(__name__)
+
 
 async def send_slots_message(
     chat_id: int,
@@ -17,6 +20,7 @@ async def send_slots_message(
 ) -> None:
     slots = list(slots)
     if not slots:
+        logger.debug("Skipping slots notification because no slots were provided")
         return
 
     lines: list[str] = []
@@ -40,6 +44,20 @@ async def send_slots_message(
         [[InlineKeyboardButton("Open GoSwift booking", url=booking_url)]]
     )
 
+    logger.info(
+        "Sending slots notification: chat_id=%s slots=%d booking_url=%s",
+        chat_id,
+        len(slots),
+        booking_url,
+    )
+    logger.debug(
+        "Slots notification payload: chat_id=%s slot_ids=%s text=%r keyboard=%s",
+        chat_id,
+        [slot.id for slot in slots],
+        text,
+        keyboard,
+    )
+
     await context.bot.send_message(
         chat_id=chat_id,
         text=text,
@@ -54,6 +72,8 @@ async def send_info_message(
     text: str,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
+    logger.info("Sending info message: chat_id=%s text_length=%d", chat_id, len(text))
+    logger.debug("Info message payload: chat_id=%s text=%r", chat_id, text)
     await context.bot.send_message(
         chat_id=chat_id,
         text=text,

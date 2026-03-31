@@ -20,6 +20,7 @@ goswift_venv/
 # Local environment and runtime state
 .env
 runtime_config.json
+logs/
 
 # Local editor/assistant artifacts
 .cursor/
